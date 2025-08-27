@@ -8,7 +8,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
-import psycopg2   # ✅ PostgreSQL 드라이버
+import psycopg2  # ✅ PostgreSQL 드라이버
 from datetime import datetime, date
 
 # ======================
@@ -16,38 +16,34 @@ from datetime import datetime, date
 # ======================
 DB_CONFIG = {
     "host": "localhost",
-    "port": "ㅇ",
+    "port": ,
     "user": "",
-    "password": "", # 베낄테면 베껴라!!
-    "dbname": ""   # PostgreSQL은 database 대신 dbname
+    "password": "",
+    "dbname": ""  # ✅ PostgreSQL은 database 대신 dbname
 }
 
 # ======================
 # Chrome 설정
 # ======================
 chrome_options = Options()
-# chrome_options.add_argument("--headless")  # 필요 시 주석 해제
+# chrome_options.add_argument("--headless")
 driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()), options=chrome_options)
 
-DOWNLOAD_DIR = r"C:\Users\chltm\Downloads"  # 네 PC 다운로드 폴더
+DOWNLOAD_DIR = r"C:\Users\chltm\Downloads"
 
 
 def download_latest_pdf():
-    """게시판에서 최신 글 첨부파일 (PDF만 Selenium 클릭으로 다운로드)"""
     url = "https://www.smpa.go.kr/user/nd54882.do"
     driver.get(url)
     time.sleep(2)
 
-    # 최신 글 클릭
     first_post = driver.find_element(By.CSS_SELECTOR, "table tr td a")
     first_post.click()
     time.sleep(2)
 
-    # 👉 새 탭 전환
     driver.switch_to.window(driver.window_handles[-1])
     time.sleep(1)
 
-    # 첨부파일 찾기
     links = driver.find_elements(By.CSS_SELECTOR, "a.doc_link")
     pdf_link = None
     for l in links:
@@ -59,11 +55,9 @@ def download_latest_pdf():
         print("❌ PDF 파일 없음")
         return None
 
-    # 🔥 실제 클릭으로 다운로드 실행
     pdf_link.click()
-    time.sleep(5)  # 다운로드 기다리기
+    time.sleep(5)
 
-    # 방금 다운로드된 최신 PDF 찾기
     files = sorted(
         [os.path.join(DOWNLOAD_DIR, f) for f in os.listdir(DOWNLOAD_DIR) if f.lower().endswith(".pdf")],
         key=os.path.getctime,
@@ -75,7 +69,6 @@ def download_latest_pdf():
 
 
 def parse_meeting_table_pdf(file_path):
-    """PDF 테이블 → JSON 파싱"""
     meetings = []
 
     with pdfplumber.open(file_path) as pdf:
@@ -84,7 +77,6 @@ def parse_meeting_table_pdf(file_path):
             if not table:
                 continue
 
-            # 첫 행은 헤더니까 스킵
             for row in table[1:]:
                 if not row or len(row) < 3:
                     continue
@@ -93,16 +85,27 @@ def parse_meeting_table_pdf(file_path):
                 location_text = row[1] or ""
                 people_text = row[2] or ""
 
-                # 괄호 안 내용 제거
-                location_text = re.sub(r"<.*?>", "", location_text).strip()
+                # area 추출 (<> 안)
+                # area 추출 (<> 안)
+                area_match = re.search(r"<(.*?)>", location_text)
+                if area_match:
+                    area = area_match.group(1).strip()
+                    # "등" 으로 끝나는 경우 제거
+                    area = re.sub(r"\s*등$", "", area).strip()
+                else:
+                    area = ""
 
-                # 인원 숫자만 추출
+                # <> 안은 제거해서 posName 만듦
+                pos_name = re.sub(r"<.*?>", "", location_text).strip()
+
+                # 인원 숫자 추출
                 people_match = re.search(r"(\d{1,3}(?:,\d{3})*|\d+)", people_text)
                 reported_people = int(people_match.group(1).replace(",", "")) if people_match else None
 
                 meetings.append({
                     "time": time_text.strip(),
-                    "location": location_text,
+                    "location": pos_name,
+                    "area": area,
                     "reported_people": reported_people
                 })
 
@@ -110,19 +113,17 @@ def parse_meeting_table_pdf(file_path):
 
 
 def save_to_db(meetings):
-    """PostgreSQL DB 저장"""
-    conn = psycopg2.connect(**DB_CONFIG)
+    conn = psycopg2.connect(**DB_CONFIG)  # ✅ 여기 수정
     cursor = conn.cursor()
 
     sql = """
-    INSERT INTO region (region_date, start_time, end_time, pos_name, people_cnt)
-    VALUES (%s, %s, %s, %s, %s)
+    INSERT INTO region (region_date, start_time, end_time, pos_name, area, people_cnt)
+    VALUES (%s, %s, %s, %s, %s, %s)
     """
 
     today = date.today()
 
     for m in meetings:
-        # "09:00~12:00" → 시작/끝 시간
         try:
             start_str, end_str = m["time"].split("~")
         except ValueError:
@@ -133,17 +134,19 @@ def save_to_db(meetings):
         end_time = datetime.strptime(f"{today} {end_str.strip()}", "%Y-%m-%d %H:%M")
 
         cursor.execute(sql, (
-            today,                  # region_date
-            start_time,             # start_time
-            end_time,               # end_time
-            m["location"],          # pos_name
-            m["reported_people"]    # people_cnt
+            today,              # region_date
+            start_time,         # start_time
+            end_time,           # end_time
+            m["location"],      # pos_name
+            m["area"],          # area
+            m["reported_people"]# people_cnt
         ))
 
     conn.commit()
     cursor.close()
     conn.close()
     print("✅ DB 저장 완료")
+
 
 
 def main():
